@@ -131,7 +131,7 @@ def main() {
     let p1 = Vec3f(1.0, 3.0, 4.0)
     let p2 = Vec3f(2.0, -1.0, 10.0)
     let color = Color(255, 0, 0)
-    let mesh = Mesh::from_obj("src/dragon.obj", Vec3f(0.0, -2.0, 5.0))
+    let mesh = Mesh::from_obj("assets/dragon.obj", Vec3f(0.0, -2.0, 5.0))
     for tri in mesh.triangles.iter() {
         project_and_draw(image, tri.p0, tri.p1, tri.p2, color)
     }
