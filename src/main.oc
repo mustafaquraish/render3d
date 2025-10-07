@@ -2,8 +2,11 @@ import std::image::{ Image, Color, draw }
 import std::vec::{ Vec2i, Vec2f, Vec3f }
 import std::fs
 
-let image: &Image
+import @zbuffer::{ ZBuffer}
+
 let size_f: Vec2f
+let image: &Image
+let zbuffer: &ZBuffer
 
 def project_and_draw(p0: Vec3f, p1: Vec3f, p2: Vec3f, color: Color) {
     let light_dir = Vec3f(-1.0, -1.0, 0.0).normalized()
@@ -33,38 +36,61 @@ def project_and_draw(p0: Vec3f, p1: Vec3f, p2: Vec3f, color: Color) {
     let c = Color(normal.x as u8, normal.y as u8, normal.z as u8)
     // let c = Color(scale as u8, scale as u8, scale as u8)
 
-    fill_triangle(p0_s.to_i32(), p1_s.to_i32(), p2_s.to_i32(), c)
+    fill_triangle(
+        p0_s.to_i32(),
+        p1_s.to_i32(),
+        p2_s.to_i32(),
+        p0.z,
+        p1.z,
+        p2.z,
+        c
+    )
 }
 
 
-def draw_triangle(p0: Vec2i, p1: Vec2i, p2: Vec2i, color: Color) {
+def draw_triangle(
+    p0: Vec2i,
+    p1: Vec2i,
+    p2: Vec2i,
+    z0: f32,
+    z1: f32,
+    z2: f32,
+    color: Color
+) {
     draw::line(image, p0.x, p0.y, p1.x, p1.y, color)
     draw::line(image, p1.x, p1.y, p2.x, p2.y, color)
     draw::line(image, p2.x, p2.y, p0.x, p0.y, color)
 }
 
 
-def fill_triangle(p0: Vec2i, p1: Vec2i, p2: Vec2i, color: Color) {
+def fill_triangle(
+    p0: Vec2i,
+    p1: Vec2i,
+    p2: Vec2i,
+    z0: f32,
+    z1: f32,
+    z2: f32,
+    color: Color
+) {
     let min_x = p0.x.min(p1.x.min(p2.x)).max(0)
     let min_y = p0.y.min(p1.y.min(p2.y)).max(0)
     let max_x = p0.x.max(p1.x.max(p2.x)).min((image.width - 1) as i32)
     let max_y = p0.y.max(p1.y.max(p2.y)).min((image.height - 1) as i32)
 
+    let denom = (p0.x - p2.x)*(p1.y - p2.y) - (p1.x - p2.x)*(p0.y - p2.y)
+
     for let x = min_x; x <= max_x; x += 1 {
         for let y = min_y; y <= max_y; y += 1 {
-            let e0 = p0 - p1
-            let t0 = Vec2i(x, y) - p1
-            if e0.cross(t0) > 0 continue
+            let u  = (p1.y - p2.y)*(x - p2.x) + (p2.x - p1.x)*(y - p2.y)
+            let v  = (p2.y - p0.y)*(x - p2.x) + (p0.x - p2.x)*(y - p2.y)
+            let w = denom - u - v
 
-            let e1 = p1 - p2
-            let t1 = Vec2i(x, y) - p2
-            if e1.cross(t1) > 0 continue
-
-            let e2 = p2 - p0
-            let t2 = Vec2i(x, y) - p0
-            if e2.cross(t2) > 0 continue
-
-            image.set(x as u32, y as u32, color)
+            if u >= 0 and v >= 0 and w >= 0 {
+                let z = (z0 * u as f32 + z1 * v as f32 + z2 * w as f32) / denom as f32
+                if zbuffer.put_if_closer(x as u32, y as u32, z) {
+                    image.set(x as u32, y as u32, color)
+                }
+            }
         }
     }
 }
@@ -133,16 +159,21 @@ def Mesh::from_obj(filename: str, offset: Vec3f): Mesh {
 
 
 def main() {
-    let width = 720
-    let height = 720
+    let width = 720*4
+    let height = 720*4
     size_f = Vec2f(width as f32, height as f32)
     image = Image::new(width, height)
+    zbuffer = ZBuffer::new(width, height)
+
 
     let p0 = Vec3f(-1.0, -1.0, 4.0)
     let p1 = Vec3f(1.0, 3.0, 4.0)
     let p2 = Vec3f(2.0, -1.0, 10.0)
     let color = Color(255, 0, 0)
     let mesh = Mesh::from_obj("assets/dragon.obj", Vec3f(0.0, -2.0, 5.0))
+
+    image.clear()
+    zbuffer.clear()
     for tri in mesh.triangles.iter() {
         project_and_draw(tri.p0, tri.p1, tri.p2, color)
     }

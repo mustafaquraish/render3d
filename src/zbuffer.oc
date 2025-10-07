@@ -1,0 +1,33 @@
+import std::mem
+import std::math
+
+struct ZBuffer {
+    width: u32
+    height: u32
+    data: &f32
+}
+
+def ZBuffer::new(w: u32, h: u32): &ZBuffer {
+    let size = w * h
+    let data = mem::alloc<f32>(w*h)
+    for let i = 0; i < size; i += 1 {
+        data[i] = f32::inf()
+    }
+    return @new ZBuffer(w, h, data)
+}
+
+def ZBuffer::clear(&this) {
+    let size = .width * .height
+    for let i = 0; i < size; i += 1 {
+        .data[i] = f32::inf()
+    }
+}
+
+def ZBuffer::put_if_closer(&this, x: u32, y: u32, z: f32): bool {
+    let idx = (y * .width + x) as i32
+    if z < .data[idx] {
+        .data[idx] = z
+        return true
+    }
+    return false
+}
