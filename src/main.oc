@@ -252,6 +252,9 @@ def main() {
         update_camera(&camera_pos, &camera_dir)
     }
 
+    // TODO: Only move along X-Z plane with WASD, and not along the Y axis
+    // TODO: This is only for keys that are _held down_, and we can't handle just keydowns
+    //       here (for eg: jumping is a one-time thing when space is first pressed)
     let key_callbacks: ${sdl::Key: @fn()} = ${
         W: || {
             camera_pos = camera_pos + camera_dir * dtime * MOVE_SENSITIVITY
@@ -286,6 +289,10 @@ def main() {
         Right: || => rotate_camera(1, 0, KEYBOARD_LOOK_SENSITIVITY),
     }
 
+    let fps_sum = 0i
+    let fps_window_size = 10
+
+    let frame = 0
     let prev_ticks = sdl::get_ticks()
     let sdl_callback = ||: bool {
         let curr_ticks = sdl::get_ticks()
@@ -313,6 +320,16 @@ def main() {
         texture.write_image(image)
         renderer.copy_and_display(texture)
 
+        let fps = (1.0 / dtime) as i32
+        fps_sum += fps
+
+        if frame % fps_window_size == 0 {
+            let fps_avg = fps_sum / fps_window_size as i32
+            window.set_title(`FPS: {fps_avg}`)
+            fps_sum = 0
+        }
+
+        ++frame
         return true
     }
     sdl::run_main_loop(sdl_callback)
