@@ -13,11 +13,23 @@ let camera_transform: Matrix4f
 let light_dir: Vec3f
 
 def project_and_draw(p0: Vec3f, p1: Vec3f, p2: Vec3f, color: Color) {
-
     // project to camera space
     let p0_c = camera_transform * p0
     let p1_c = camera_transform * p1
     let p2_c = camera_transform * p2
+
+    // TODO: Clip triangles if only partially in view. Currently we
+    //       completely ignore it if any of the vertices are behind the camera
+    // TODO: Also clip / ignore any vertices for the other ends of the frustum
+    if p0_c.z <= 0.0 or p1_c.z <= 0.0 or p2_c.z <= 0.0 {
+        return
+    }
+
+    let cam_normal = (p1_c - p0_c).cross(p2_c - p0_c).normalized()
+    // backface culling
+    if cam_normal.dot(-1.0 * p0_c) < 0.0 {
+        return
+    }
 
     // project to screen space
     let p0_s = Vec2f(p0_c.x / p0_c.z, p0_c.y / p0_c.z)
@@ -31,6 +43,7 @@ def project_and_draw(p0: Vec3f, p1: Vec3f, p2: Vec3f, color: Color) {
 
     // TEMP: color based on normal
     let normal = (p1 - p0).cross(p2 - p0).normalized()
+
     let scale = normal.dot(-1.0 * light_dir).max(0.1)
 
     normal = normal * 128.0 + 128.0
