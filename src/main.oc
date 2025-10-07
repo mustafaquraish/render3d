@@ -1,6 +1,7 @@
 import std::image::{ Image, Color, draw }
 import std::vec::{ Vec2i, Vec2f, Vec3f }
 import std::fs
+import std::sv::SV
 import std::matrix::Matrix4f
 import std::sdl
 
@@ -9,14 +10,24 @@ import @zbuffer::{ ZBuffer}
 let size_f: Vec2f
 let image: &Image
 let zbuffer: &ZBuffer
-let camera_transform: Matrix4f
 let light_dir: Vec3f
+let aspect_ratio: Vec2f
 
-def project_and_draw(p0: Vec3f, p1: Vec3f, p2: Vec3f, color: Color) {
+let camera_transform: Matrix4f
+let camera_pos: Vec3f
+let camera_dir: Vec3f
+let camera_up: Vec3f
+
+def vec_to_col(vec: Vec3f, scale: f32 = 1.0): Color {
+    vec = (vec.normalized() * 128.0 + 128.0) * scale
+    return Color(vec.x as u8, vec.y as u8, vec.z as u8)
+}
+
+def project_and_draw(tri: Triangle, color: Color) {
     // project to camera space
-    let p0_c = camera_transform * p0
-    let p1_c = camera_transform * p1
-    let p2_c = camera_transform * p2
+    let p0_c = camera_transform * tri.p0
+    let p1_c = camera_transform * tri.p1
+    let p2_c = camera_transform * tri.p2
 
     // TODO: Clip triangles if only partially in view. Currently we
     //       completely ignore it if any of the vertices are behind the camera
@@ -37,29 +48,20 @@ def project_and_draw(p0: Vec3f, p1: Vec3f, p2: Vec3f, color: Color) {
     let p2_s = Vec2f(p2_c.x / p2_c.z, p2_c.y / p2_c.z)
 
     // project to image space (and flip y axis)
-    let p0_i = (Vec2f(p0_s.x, -p0_s.y) + 1.0) * 0.5 * size_f
-    let p1_i = (Vec2f(p1_s.x, -p1_s.y) + 1.0) * 0.5 * size_f
-    let p2_i = (Vec2f(p2_s.x, -p2_s.y) + 1.0) * 0.5 * size_f
+    let p0_i = (Vec2f(p0_s.x, -p0_s.y) / aspect_ratio + 1.0) * 0.5 * size_f
+    let p1_i = (Vec2f(p1_s.x, -p1_s.y) / aspect_ratio + 1.0) * 0.5 * size_f
+    let p2_i = (Vec2f(p2_s.x, -p2_s.y) / aspect_ratio + 1.0) * 0.5 * size_f
 
-    // TEMP: color based on normal
-    let normal = (p1 - p0).cross(p2 - p0).normalized()
-
-    let scale = normal.dot(-1.0 * light_dir).max(0.1)
-
-    normal = normal * 128.0 + 128.0
-    // normal = normal * scale
-
-    let c = Color(normal.x as u8, normal.y as u8, normal.z as u8)
-    // let c = Color(scale as u8, scale as u8, scale as u8)
-
-    fill_triangle(
+    fill_triangle_zc(
         p0_i.to_i32(),
         p1_i.to_i32(),
         p2_i.to_i32(),
         p0_c.z,
         p1_c.z,
         p2_c.z,
-        c
+        c0: vec_to_col(tri.n0),
+        c1: vec_to_col(tri.n1),
+        c2: vec_to_col(tri.n2),
     )
 }
 
@@ -78,15 +80,17 @@ def draw_triangle(
     draw::line(image, p2.x, p2.y, p0.x, p0.y, color)
 }
 
-
-def fill_triangle(
+//! Fill a triangle, while interpolating depth and color for the vertices
+def fill_triangle_zc(
     p0: Vec2i,
     p1: Vec2i,
     p2: Vec2i,
     z0: f32,
     z1: f32,
     z2: f32,
-    color: Color
+    c0: Color,
+    c1: Color,
+    c2: Color,
 ) {
     let min_x = p0.x.min(p1.x.min(p2.x)).max(0)
     let min_y = p0.y.min(p1.y.min(p2.y)).max(0)
@@ -103,8 +107,14 @@ def fill_triangle(
 
             if u >= 0 and v >= 0 and w >= 0 {
                 let z = (z0 * u as f32 + z1 * v as f32 + z2 * w as f32) / denom as f32
+                let col = Color(
+                    ((c0.r as i32 * u + c1.r as i32 * v + c2.r as i32 * w) / denom) as u8,
+                    ((c0.g as i32 * u + c1.g as i32 * v + c2.g as i32 * w) / denom) as u8,
+                    ((c0.b as i32 * u + c1.b as i32 * v + c2.b as i32 * w) / denom) as u8,
+                )
+
                 if zbuffer.put_if_closer(x as u32, y as u32, z) {
-                    image.set(x as u32, y as u32, color)
+                    image.set(x as u32, y as u32, col)
                 }
             }
         }
@@ -113,6 +123,7 @@ def fill_triangle(
 
 struct Triangle {
     p0, p1, p2 : Vec3f
+    n0, n1, n2 : Vec3f
 }
 
 
@@ -120,8 +131,14 @@ struct Mesh {
     triangles: $[Triangle]
 }
 
+struct Vertex {
+    pos: Vec3f
+    tex: Vec2f
+    nor: Vec3f
+}
 
-def Mesh::from_obj(filename: str, offset: Vec3f): Mesh {
+
+def Mesh::from_obj(filename: str): Mesh {
     let file = fs::read_file(filename)
     defer file.free()
 
@@ -135,35 +152,32 @@ def Mesh::from_obj(filename: str, offset: Vec3f): Mesh {
     let textures: $[Vec2f] = $[]
     defer textures.free()
 
+    let parse_vertex = |line: &SV|: Vertex {
+        let part = line.chop_by_delim(' ')
+        let pos = vectors[part.chop_u32() - 1]
+        part.chop_left(1)
+        let texcoord = textures[part.chop_u32() - 1]
+        part.chop_left(1)
+        let normal = normals[part.chop_u32() - 1]
+        line.trim()
+        return Vertex(pos, texcoord, normal)
+    }
+
     let triangles: $[Triangle] = $[]
     for line in sv.lines() {
         match line.chop_word() {
-            "v" => vectors.push(Vec3f(line.chop_f32(), line.chop_f32(), line.chop_f32()) + offset)
+            "v" => vectors.push(Vec3f(line.chop_f32(), line.chop_f32(), line.chop_f32()))
             "vn" => normals.push(Vec3f(line.chop_f32(), line.chop_f32(), line.chop_f32()))
             "vt" => textures.push(Vec2f(line.chop_f32(), line.chop_f32()))
             "f" => {
-                let s0 = line.chop_by_delim(' ')
-                let v0 = vectors[s0.chop_u32() - 1]
-                s0.chop_left(1)
-                let t0 = textures[s0.chop_u32() - 1]
-                s0.chop_left(1)
-                let n0 = normals[s0.chop_u32() - 1]
+                let p0 = parse_vertex(&line)
+                let p1 = parse_vertex(&line)
 
-                let s1 = line.chop_by_delim(' ')
-                let v1 = vectors[s1.chop_u32() - 1]
-                s1.chop_left(1)
-                let t1 = textures[s1.chop_u32() - 1]
-                s1.chop_left(1)
-                let n1 = normals[s1.chop_u32() - 1]
-
-                let s2 = line.chop_by_delim(' ')
-                let v2 = vectors[s2.chop_u32() - 1]
-                s2.chop_left(1)
-                let t2 = textures[s2.chop_u32() - 1]
-                s2.chop_left(1)
-                let n2 = normals[s2.chop_u32() - 1]
-
-                triangles += Triangle(v0, v1, v2)  //  n0, n1, n2, t0, t1, t2
+                while line.len > 0 {
+                    let p2 = parse_vertex(&line)
+                    triangles += Triangle(p0.pos, p1.pos, p2.pos, p0.nor, p1.nor, p2.nor)
+                    p1 = p2
+                }
             }
             else => {}
         }
@@ -201,22 +215,9 @@ def rotate_vector(v: Vec3f, axis: Vec3f, angle: f32): Vec3f {
     return term1 + term2 + term3
 }
 
-def main() {
-    let width = 720
-    let height = 720
-    size_f = Vec2f(width as f32, height as f32)
-    image = Image::new(width, height)
-    zbuffer = ZBuffer::new(width, height)
-
-    light_dir = Vec3f(1.0, -1.0, 0.0).normalized()
-
-    let camera_pos = Vec3f(-4.0, 0.0, 2.0)
-    let camera_dir = Vec3f(1.0, 0.0, 1.0)
-    let camera_up = Vec3f(0.0, 1.0, 0.0)
-    update_camera(&camera_pos, &camera_dir)
-
-    let color = Color(255, 0, 0)
-    let mesh = Mesh::from_obj("assets/dragon.obj", Vec3f(0.0, -2.0, 5.0))
+def run_ui(mesh: &Mesh) {
+    let width = image.width
+    let height = image.height
 
     // SDL code follows
     sdl::init(sdl::INIT_EVERYTHING)
@@ -232,7 +233,7 @@ def main() {
         height as i32,
     )
 
-    let MOVE_SENSITIVITY: f32 = 10.0
+    let MOVE_SENSITIVITY: f32 = 5.0
     let KEYBOARD_LOOK_SENSITIVITY: f32 = 1.5
     let MOUSE_LOOK_SENSITIVITY: f32 = 0.2
     let dtime: f32 = 0.0
@@ -294,6 +295,9 @@ def main() {
 
     let frame = 0
     let prev_ticks = sdl::get_ticks()
+
+    let dummy_color = Color(255, 0, 0)
+
     let sdl_callback = ||: bool {
         let curr_ticks = sdl::get_ticks()
         dtime = (curr_ticks - prev_ticks) as f32 / 1000.0
@@ -314,7 +318,7 @@ def main() {
         image.clear()
         zbuffer.clear()
         for tri in mesh.triangles.iter() {
-            project_and_draw(tri.p0, tri.p1, tri.p2, color)
+            project_and_draw(tri, dummy_color)
         }
 
         texture.write_image(image)
@@ -333,4 +337,26 @@ def main() {
         return true
     }
     sdl::run_main_loop(sdl_callback)
+}
+
+def main() {
+    let width = 1280
+    let height = 720
+
+    aspect_ratio = Vec2f(width as f32 / height as f32, 1.0)
+    size_f = Vec2f(width as f32, height as f32)
+    image = Image::new(width, height)
+    zbuffer = ZBuffer::new(width, height)
+
+    light_dir = Vec3f(1.0, -1.0, 0.0).normalized()
+
+    camera_pos = Vec3f(0.0, 0.0, -4.0)
+    camera_dir = Vec3f(0.0, 0.0, 1.0)
+    camera_up = Vec3f(0.0, 1.0, 0.0)
+    update_camera(&camera_pos, &camera_dir)
+
+    let color = Color(255, 0, 0)
+    let mesh = Mesh::from_obj("assets/living_room.obj")
+
+    run_ui(&mesh)
 }
