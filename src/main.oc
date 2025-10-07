@@ -2,6 +2,7 @@ import std::image::{ Image, Color, draw }
 import std::vec::{ Vec2i, Vec2f, Vec3f }
 import std::fs
 import std::matrix::Matrix4f
+import std::sdl
 
 import @zbuffer::{ ZBuffer}
 
@@ -33,7 +34,7 @@ def project_and_draw(p0: Vec3f, p1: Vec3f, p2: Vec3f, color: Color) {
     let scale = normal.dot(-1.0 * light_dir).max(0.1)
 
     normal = normal * 128.0 + 128.0
-    normal = normal * scale
+    // normal = normal * scale
 
     let c = Color(normal.x as u8, normal.y as u8, normal.z as u8)
     // let c = Color(scale as u8, scale as u8, scale as u8)
@@ -42,9 +43,9 @@ def project_and_draw(p0: Vec3f, p1: Vec3f, p2: Vec3f, color: Color) {
         p0_i.to_i32(),
         p1_i.to_i32(),
         p2_i.to_i32(),
-        p0.z,
-        p1.z,
-        p2.z,
+        p0_c.z,
+        p1_c.z,
+        p2_c.z,
         c
     )
 }
@@ -174,6 +175,19 @@ def update_camera(origin: &Vec3f, direction: &Vec3f) {
     )
 }
 
+def rotate_vector(v: Vec3f, axis: Vec3f, angle: f32): Vec3f {
+    let cos_theta = angle.cos()
+    let sin_theta = angle.sin()
+
+    // v_rot = v*cos(theta) + (axis x v)*sin(theta) + axis*(axis . v)*(1-cos(theta))
+    let term1 = v * cos_theta
+    let term2 = axis.cross(v) * sin_theta
+    let dot_av = axis.dot(v)
+    let term3 = axis * dot_av * (1.0 - cos_theta)
+
+    return term1 + term2 + term3
+}
+
 def main() {
     let width = 720
     let height = 720
@@ -185,15 +199,108 @@ def main() {
 
     let camera_pos = Vec3f(-4.0, 0.0, 2.0)
     let camera_dir = Vec3f(1.0, 0.0, 1.0)
+    let camera_up = Vec3f(0.0, 1.0, 0.0)
     update_camera(&camera_pos, &camera_dir)
 
     let color = Color(255, 0, 0)
     let mesh = Mesh::from_obj("assets/dragon.obj", Vec3f(0.0, -2.0, 5.0))
 
-    image.clear()
-    zbuffer.clear()
-    for tri in mesh.triangles.iter() {
-        project_and_draw(tri.p0, tri.p1, tri.p2, color)
+    // SDL code follows
+    sdl::init(sdl::INIT_EVERYTHING)
+    sdl::set_relative_mouse_mode(true)
+
+    let window: &sdl::Window
+    let renderer: &sdl::Renderer
+    sdl::create_window_renderer(width as i32, height as i32, 0, &window, &renderer)
+    let texture = renderer.create_texture(
+        sdl::PIXELFORMAT_ABGR8888,
+        sdl::TEXTUREACCESS_STREAMING,
+        width as i32,
+        height as i32,
+    )
+
+    let MOVE_SENSITIVITY: f32 = 10.0
+    let KEYBOARD_LOOK_SENSITIVITY: f32 = 1.5
+    let MOUSE_LOOK_SENSITIVITY: f32 = 0.2
+    let dtime: f32 = 0.0
+
+    let rotate_camera = |dx: i32, dy: i32, sensitivity: f32| {
+        if dx == 0 and dy == 0 return
+        let yaw_rad = dx as f32 * sensitivity * dtime
+        let pitch_rad = dy as f32 * sensitivity * dtime
+
+        camera_dir = rotate_vector(camera_dir, camera_up, yaw_rad)
+        let right = camera_dir.cross(camera_up).normalized()
+        let new_dir_after_pitch = rotate_vector(camera_dir, right, pitch_rad)
+
+        if new_dir_after_pitch.dot(camera_up).abs() < 0.995 {
+            camera_dir = new_dir_after_pitch
+        }
+        update_camera(&camera_pos, &camera_dir)
     }
-    image.save("triangle.png")
+
+    let key_callbacks: ${sdl::Key: @fn()} = ${
+        W: || {
+            camera_pos = camera_pos + camera_dir * dtime * MOVE_SENSITIVITY
+            update_camera(&camera_pos, &camera_dir)
+        },
+        S: || {
+            camera_pos = camera_pos - camera_dir * dtime * MOVE_SENSITIVITY
+            update_camera(&camera_pos, &camera_dir)
+        },
+        A: || {
+            let delta = camera_dir.cross(Vec3f(0.0, 1.0, 0.0)).normalized() * dtime * MOVE_SENSITIVITY
+            camera_pos = camera_pos + delta
+            update_camera(&camera_pos, &camera_dir)
+        },
+        D: || {
+            let delta = camera_dir.cross(Vec3f(0.0, 1.0, 0.0)).normalized() * dtime * MOVE_SENSITIVITY
+            camera_pos = camera_pos - delta
+            update_camera(&camera_pos, &camera_dir)
+        },
+        Z: || {
+            camera_pos = camera_pos + camera_up * dtime * MOVE_SENSITIVITY
+            update_camera(&camera_pos, &camera_dir)
+        },
+        X: || {
+            camera_pos = camera_pos - camera_up * dtime * MOVE_SENSITIVITY
+            update_camera(&camera_pos, &camera_dir)
+        },
+
+        Up:    || => rotate_camera(0, 1, KEYBOARD_LOOK_SENSITIVITY),
+        Down:  || => rotate_camera(0, -1, KEYBOARD_LOOK_SENSITIVITY),
+        Left:  || => rotate_camera(-1, 0, KEYBOARD_LOOK_SENSITIVITY),
+        Right: || => rotate_camera(1, 0, KEYBOARD_LOOK_SENSITIVITY),
+    }
+
+    let prev_ticks = sdl::get_ticks()
+    let sdl_callback = ||: bool {
+        let curr_ticks = sdl::get_ticks()
+        dtime = (curr_ticks - prev_ticks) as f32 / 1000.0
+        prev_ticks = curr_ticks
+
+        let key_states = sdl::get_keyboard_state()
+        for it in key_callbacks.iter() {
+            if key_states[it.key as u32] != 0 {
+                it.value()
+            }
+        }
+
+        let mx: i32
+        let my: i32
+        sdl::get_relative_mouse_state(&mx, &my)
+        rotate_camera(mx, -my, MOUSE_LOOK_SENSITIVITY)
+
+        image.clear()
+        zbuffer.clear()
+        for tri in mesh.triangles.iter() {
+            project_and_draw(tri.p0, tri.p1, tri.p2, color)
+        }
+
+        texture.write_image(image)
+        renderer.copy_and_display(texture)
+
+        return true
+    }
+    sdl::run_main_loop(sdl_callback)
 }
