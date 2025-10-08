@@ -2093,7 +2093,6 @@ void run_ui(Mesh *mesh) {
   u32 width = image->width;
   u32 height = image->height;
   SDL_Init(SDL_INIT_EVERYTHING);
-  SDL_SetRelativeMouseMode(true);
   SDL_Window *window;
   SDL_Renderer *renderer;
   SDL_CreateWindowAndRenderer(1280, 720, 0, &window, &renderer);
@@ -2121,6 +2120,9 @@ void run_ui(Mesh *mesh) {
   u32 frame = 0;
   i32 prev_ticks = SDL_GetTicks();
   std_image_Color dummy_color = (std_image_Color){.r=((u8)255), .g=((u8)0), .b=((u8)0)};
+  SDL_SetRelativeMouseMode(true);
+  SDL_ShowCursor(false);
+  SDL_CaptureMouse(true);
   _ClosureTy_3 sdl_callback = ({run_ui__Closure_12Ctx *_C60 = alloca(sizeof(run_ui__Closure_12Ctx));_C60->fps_sum = &fps_sum;_C60->dtime = &dtime;_C60->mesh = &mesh;_C60->key_callbacks = &key_callbacks;_C60->frame = &frame;_C60->renderer = &renderer;_C60->window = &window;_C60->fps_window_size = &fps_window_size;_C60->rotate_camera = &rotate_camera;_C60->texture = &texture;_C60->prev_ticks = &prev_ticks;_C60->MOUSE_LOOK_SENSITIVITY = &MOUSE_LOOK_SENSITIVITY;_C60->dummy_color = &dummy_color;_ClosureTy_3 _ci61 = {._C=_C60, .fn=&run_ui__Closure_12};_ci61;});
   std_sdl_run_main_loop(sdl_callback);
 }
