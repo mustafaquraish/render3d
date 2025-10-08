@@ -182,6 +182,7 @@ def i32::sign(this): i32 => (this > 0) as i32 - (this < 0) as i32
 def is_ok(a: i32, b: i32): bool => a.sign() == b.sign() or a == 0
 
 //! Fill a triangle, while interpolating depth and color for the vertices
+[flatten]
 def fill_triangle_zc(
     p0: Vec2i,
     p1: Vec2i,
@@ -326,7 +327,7 @@ def run_ui(mesh: &Mesh) {
 
     let window: &sdl::Window
     let renderer: &sdl::Renderer
-    sdl::create_window_renderer(1920, 1080, 0, &window, &renderer)
+    sdl::create_window_renderer(1280, 720, 0, &window, &renderer)
     let texture = renderer.create_texture(
         sdl::PIXELFORMAT_ABGR8888,
         sdl::TEXTUREACCESS_STREAMING,
@@ -442,7 +443,7 @@ def run_ui(mesh: &Mesh) {
 
 def main(argc: i32, argv: &str) {
     let parser = argparse::Parser::make("render3d")
-    let model = parser.add_str("obj", "Path to the .obj file")
+    let model = parser.add_str("-o", help: "Path to the .obj file", defolt: "./assets/dragon.obj")
     let res = parser.add_str("-r", help: "Render resolution", defolt: "960x540")
     let opt_bf_cull = parser.add_bool("-b", help: "Backface culling", action: StoreFalse)
     parser.parse(argc, argv)
