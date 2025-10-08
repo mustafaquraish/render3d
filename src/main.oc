@@ -323,7 +323,6 @@ def run_ui(mesh: &Mesh) {
 
     // SDL code follows
     sdl::init(sdl::INIT_EVERYTHING)
-    sdl::set_relative_mouse_mode(true)
 
     let window: &sdl::Window
     let renderer: &sdl::Renderer
@@ -399,6 +398,10 @@ def run_ui(mesh: &Mesh) {
     let prev_ticks = sdl::get_ticks()
 
     let dummy_color = Color(255, 0, 0)
+
+    sdl::set_relative_mouse_mode(true)
+    sdl::show_cursor(false)
+    sdl::capture_mouse(true)
 
     let sdl_callback = ||: bool {
         let curr_ticks = sdl::get_ticks()
