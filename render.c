@@ -11,6 +11,41 @@
 #include "time.h"
 #include "errno.h"
 
+/* Embed: /home/runner/work/render3d/render3d/ocen/std/og/interface.c */
+/**
+ * This is a simple interface to register a main loop function.
+ * It's written at the C level since we want some compile-time
+ * conditional logic dependong on the target platform, which
+ * we cannot do natively in Ocen right now.
+*/
+
+// NOTE: Emscripten expects a callback that doesn't return anything,
+//       but we want to be able to return a boolean to indicate when
+//       the main loop should stop. We'll use a wrapper function to
+//       handle this, and store the actual callback in a global variable.
+
+
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#include <emscripten/html5.h>
+
+_Bool (*callback)(void) = NULL;
+// EMS no-return callback wrapper
+void ems_callback() {
+    if (callback) callback();
+}
+#endif
+
+void c_set_main_loop(_Bool (*func)(void)) {
+#ifdef __EMSCRIPTEN__
+    callback = func;
+    emscripten_set_main_loop(ems_callback, 0, 1);
+#else
+    while (func()) {}
+#endif
+}
+
+
 /* Embed: /home/runner/work/render3d/render3d/ocen/std/./prelude.h */
 #include <stdio.h>
 #include <stdint.h>
@@ -80,6 +115,7 @@ void ae_assert_fail(char *dbg_msg, char *msg) {
 /* Constants */
 #define std_compact_map_INDEX_FREE (-1)
 #define std_compact_map_INDEX_DELETED (-2)
+#define std_og_state_FRAMETIMES_COUNT (200)
 /* Typedefs */
 typedef struct std_sv_SV std_sv_SV;
 typedef struct std_sv_SVLineIterator std_sv_SVLineIterator;
@@ -97,8 +133,12 @@ typedef struct std_argparse_Arg std_argparse_Arg;
 typedef struct std_argparse_Parser std_argparse_Parser;
 typedef enum std_argparse_BoolAction std_argparse_BoolAction;
 typedef struct std_buffer_Buffer std_buffer_Buffer;
-typedef struct std_vec_Vec2__1 std_vec_Vec2__1;
+typedef struct std_og_Texture std_og_Texture;
+typedef struct std_og_state_KeyState std_og_state_KeyState;
 typedef struct std_vec_Vec2__3 std_vec_Vec2__3;
+typedef struct std_og_state_MouseState std_og_state_MouseState;
+typedef enum std_og_state_MouseWheel std_og_state_MouseWheel;
+typedef struct std_vec_Vec2__1 std_vec_Vec2__1;
 typedef struct std_vec_Vec3__0 std_vec_Vec3__0;
 typedef struct std_vector_Vector__0 std_vector_Vector__0;
 typedef struct std_vector_Vector__1 std_vector_Vector__1;
@@ -114,7 +154,6 @@ typedef struct Triangle Triangle;
 typedef struct Mesh Mesh;
 typedef struct Vertex Vertex;
 typedef struct src_zbuffer_ZBuffer src_zbuffer_ZBuffer;
-typedef struct _ClosureTy_3 _ClosureTy_3;
 typedef struct _ClosureTy_5 _ClosureTy_5;
 typedef struct _ClosureTy_8 _ClosureTy_8;
 typedef struct _ClosureTy_9 _ClosureTy_9;
@@ -287,6 +326,48 @@ struct std_buffer_Buffer {
   u32 capacity;
 };
 
+struct std_og_Texture {
+  SDL_Texture *tx;
+  i32 w;
+  i32 h;
+  u8 *pixels;
+  i32 pitch;
+};
+
+struct std_og_state_KeyState {
+  bool keys[SDL_NUM_SCANCODES];
+};
+
+struct std_vec_Vec2__3 {
+  i32 x;
+  i32 y;
+};
+
+struct std_og_state_MouseState {
+  std_vec_Vec2__3 vec;
+  std_vec_Vec2__3 pos;
+  bool buttons[16];
+  bool wheel_dirs[8];
+  std_vec_Vec2__3 scroll;
+};
+
+enum std_og_state_MouseWheel {
+  std_og_state_MouseWheel_Down,
+  std_og_state_MouseWheel_Right,
+  std_og_state_MouseWheel_Up,
+  std_og_state_MouseWheel_Left,
+};
+
+char *std_og_state_MouseWheel_dbg(std_og_state_MouseWheel this) {
+  switch (this) {
+    case std_og_state_MouseWheel_Down: return "Down";
+    case std_og_state_MouseWheel_Right: return "Right";
+    case std_og_state_MouseWheel_Up: return "Up";
+    case std_og_state_MouseWheel_Left: return "Left";
+    default: return "<unknown>";
+  }
+}
+
 char *std_fs_SeekMode_dbg(i32 this) {
   switch (this) {
     case SEEK_SET: return "Set";
@@ -299,11 +380,6 @@ char *std_fs_SeekMode_dbg(i32 this) {
 struct std_vec_Vec2__1 {
   f32 x;
   f32 y;
-};
-
-struct std_vec_Vec2__3 {
-  i32 x;
-  i32 y;
 };
 
 struct std_vec_Vec3__0 {
@@ -363,6 +439,10 @@ struct std_vector_Iterator__2 {
   u32 index;
 };
 
+struct std_matrix_Matrix4f {
+  f32 d[4][4];
+};
+
 char *std_sdl_MouseButton_dbg(u8 this) {
   switch (this) {
     case SDL_BUTTON_LEFT: return "Left";
@@ -387,10 +467,6 @@ char *std_sdl_EventType_dbg(SDL_EventType this) {
     default: return "<unknown>";
   }
 }
-
-struct std_matrix_Matrix4f {
-  f32 d[4][4];
-};
 
 struct Triangle {
   std_vec_Vec3__0 p0;
@@ -417,10 +493,6 @@ struct src_zbuffer_ZBuffer {
   f32 *data;
 };
 
-struct _ClosureTy_3 {
-  void *_C;
-  bool (*fn)(void *__C);
-};
 struct _ClosureTy_5 {
   void *_C;
   void (*fn)(void *__C, std_argparse_Arg *arg);
@@ -482,19 +554,6 @@ struct run_ui__Closure_11Ctx {
   _ClosureTy_9 *rotate_camera;
 };
 struct run_ui__Closure_12Ctx {
-  i32 *fps_sum;
-  f32 *dtime;
-  Mesh **mesh;
-  std_compact_map_Map__0 **key_callbacks;
-  u32 *frame;
-  SDL_Renderer **renderer;
-  SDL_Window **window;
-  u32 *fps_window_size;
-  _ClosureTy_9 *rotate_camera;
-  SDL_Texture **texture;
-  i32 *prev_ticks;
-  f32 *MOUSE_LOOK_SENSITIVITY;
-  std_image_Color *dummy_color;
 };
 struct std_argparse_usage_and_exit__Closure_13Ctx {
   u32 *max_len;
@@ -593,6 +652,22 @@ std_buffer_Buffer std_buffer_Buffer_make(u32 capacity);
 std_sv_SV std_buffer_Buffer_sv(std_buffer_Buffer this);
 void std_buffer_Buffer_free(std_buffer_Buffer *this);
 u32 u32_hash(u32 this);
+u32 std_og_get_ticks(void);
+void std_og_init(u32 width, u32 height, char *title, bool fullscreen);
+bool std_og_is_running(void);
+void std_og_quit(void);
+bool std_og_is_key_down(SDL_Scancode k);
+std_vec_Vec2__3 std_og_get_mouse_delta(void);
+void std_og_grab_input(bool grab);
+void std_og_show_cursor(bool show);
+std_og_Texture *std_og_get_buffer(void);
+void std_og_draw_buffer(void);
+void std_og_display_image(std_image_Image *img);
+bool std_og_state_KeyState_get(std_og_state_KeyState *this, SDL_Scancode k);
+void std_og_state_update_window_size(void);
+void std_og_state_add_frametime(f32 frametime);
+f32 std_og_state_get_avg_frametime(void);
+void std_og_utils_handle_sdl_events(void);
 std_buffer_Buffer std_fs_read_file(char *path);
 f32 f32_inf(void);
 std_vec_Vec2__1 std_vec_Vec2__1_mult(std_vec_Vec2__1 this, std_vec_Vec2__1 other);
@@ -653,20 +728,17 @@ std_compact_map_Item__0 std_vector_Vector__5_at(std_vector_Vector__5 *this, u32 
 void std_vector_Vector__5_resize(std_vector_Vector__5 *this, u32 new_capacity);
 std_vector_Vector__5 *std_vector_Vector__5_new(u32 capacity);
 void std_vector_Vector__5_push(std_vector_Vector__5 *this, std_compact_map_Item__0 value);
-u32 std_sdl_Key_hash(SDL_Scancode this);
-bool std_sdl_Key_eq(SDL_Scancode this, SDL_Scancode other);
-u8 *std_sdl_get_keyboard_state(void);
-void std_sdl_Renderer_copy_and_display(SDL_Renderer *this, SDL_Texture *texture, SDL_Rect *src, SDL_Rect *dst);
-void std_sdl_Texture_write_image(SDL_Texture *this, std_image_Image *img);
-void std_sdl_run_main_loop(_ClosureTy_3 callback);
 std_matrix_Matrix4f std_matrix_Matrix4f_make(f32 d00, f32 d01, f32 d02, f32 d03, f32 d10, f32 d11, f32 d12, f32 d13, f32 d20, f32 d21, f32 d22, f32 d23, f32 d30, f32 d31, f32 d32, f32 d33);
 std_vec_Vec3__0 std_matrix_Matrix4f_mulv(std_matrix_Matrix4f this, std_vec_Vec3__0 v);
+u32 std_sdl_Key_hash(SDL_Scancode this);
+bool std_sdl_Key_eq(SDL_Scancode this, SDL_Scancode other);
+void std_sdl_Texture_write_image(SDL_Texture *this, std_image_Image *img);
 std_image_Color vec_to_col(std_vec_Vec3__0 vec, f32 scale);
 void draw_triangle_camera_space(std_vec_Vec3__0 p0, std_vec_Vec3__0 p1, std_vec_Vec3__0 p2, std_image_Color c0, std_image_Color c1, std_image_Color c2);
 std_image_Color interp_color(std_image_Color c0, std_image_Color c1, f32 t);
 std_vec_Vec3__0 interp_vec(std_vec_Vec3__0 v0, std_vec_Vec3__0 v1, f32 t);
 void swap__0(u32 *a, u32 *b);
-void project_and_draw(Triangle tri, std_image_Color color);
+void project_and_draw(Triangle tri);
 i32 i32_sign(i32 this);
 bool is_ok(i32 a, i32 b);
 void fill_triangle_zc(std_vec_Vec2__3 p0, std_vec_Vec2__3 p1, std_vec_Vec2__3 p2, f32 z0, f32 z1, f32 z2, std_image_Color c0, std_image_Color c1, std_image_Color c2);
@@ -690,12 +762,29 @@ void run_ui__Closure_8(void *__C);
 void run_ui__Closure_9(void *__C);
 void run_ui__Closure_10(void *__C);
 void run_ui__Closure_11(void *__C);
-bool run_ui__Closure_12(void *__C);
+void run_ui__Closure_12(void *__C);
 void std_argparse_usage_and_exit__Closure_13(void *__C, std_argparse_Arg *arg);
 void *std_mem_state_allocator = NULL;
 void *(*std_mem_state_alloc_fn)(void *, u32) = std_mem_impl_my_calloc;
 void *(*std_mem_state_realloc_fn)(void *, void *, u32, u32) = std_mem_impl_my_realloc;
 void (*std_mem_state_free_fn)(void *, void *) = std_mem_impl_my_free;
+SDL_Window *std_og_state_window = NULL;
+SDL_Renderer *std_og_state_renderer = NULL;
+u32 std_og_state_prev_time = 0;
+f32 std_og_state_frame_time = 0.000000f;
+bool std_og_state_running = true;
+std_vec_Vec2__3 std_og_state_window_size = {0};
+char *std_og_state_title = "Window";
+std_og_state_KeyState std_og_state_prev_keys = {0};
+std_og_state_KeyState std_og_state_keys = {0};
+std_og_state_MouseState std_og_state_prev_mouse = {0};
+std_og_state_MouseState std_og_state_mouse = {0};
+f32 std_og_state_frametimes[std_og_state_FRAMETIMES_COUNT] = {0};
+u32 std_og_state_frametime_index;
+f32 std_og_state_frametime_total = 0.000000f;
+char std_og_state_window_title_fps_buf[256] = {0};
+u64 std_og_state_frame_num = ((u64)0);
+std_og_Texture std_og_state_buffer = (std_og_Texture){.tx=NULL, .w=0, .h=0, .pixels=NULL, .pitch=0};
 std_vec_Vec2__1 size_f = {0};
 std_image_Image *image;
 src_zbuffer_ZBuffer *zbuffer;
@@ -1465,6 +1554,159 @@ void std_buffer_Buffer_free(std_buffer_Buffer *this) {
 u32 u32_hash(u32 this) {
   return (((u32)this) * 7817);}
 
+u32 std_og_get_ticks(void) {
+  return ((u32)SDL_GetTicks());}
+
+void std_og_init(u32 width, u32 height, char *title, bool fullscreen) {
+  SDL_Init(SDL_INIT_EVERYTHING);
+  SDL_CreateWindowAndRenderer(((i32)width), ((i32)height), SDL_WINDOW_RESIZABLE, &std_og_state_window, &std_og_state_renderer);
+  if (fullscreen) {
+    SDL_SetWindowFullscreen(std_og_state_window, SDL_WINDOW_FULLSCREEN_DESKTOP);
+  }
+  std_og_state_title=title;
+  SDL_SetWindowTitle(std_og_state_window, title);
+  std_og_state_prev_time=std_og_get_ticks();
+  std_og_state_update_window_size();
+}
+
+bool std_og_is_running(void) {
+  SDL_RenderPresent(std_og_state_renderer);
+  std_og_state_frame_num+=((u64)1);
+  u32 cur_time = ((u32)std_og_get_ticks());
+  std_og_state_frame_time=(((f32)(cur_time - std_og_state_prev_time)) / 1000.000000f);
+  std_og_state_prev_time=cur_time;
+  std_og_state_update_window_size();
+  std_og_state_add_frametime(std_og_state_frame_time);
+  if ((std_og_state_frame_num % ((u64)30))==((u64)0)) {
+    f32 avg = std_og_state_get_avg_frametime();
+    sprintf(std_og_state_window_title_fps_buf, "%s | FPS: %.0f", std_og_state_title, (1.000000f / avg));
+    SDL_SetWindowTitle(std_og_state_window, std_og_state_window_title_fps_buf);
+  }
+  std_og_utils_handle_sdl_events();
+  return std_og_state_running;
+}
+
+void std_og_quit(void) {
+  SDL_Quit();
+}
+
+bool std_og_is_key_down(SDL_Scancode k) {
+  return std_og_state_KeyState_get(&std_og_state_keys, k)==true;}
+
+std_vec_Vec2__3 std_og_get_mouse_delta(void) {
+  return std_og_state_mouse.vec;}
+
+void std_og_grab_input(bool grab) {
+    SDL_SetRelativeMouseMode(grab);
+}
+
+void std_og_show_cursor(bool show) {
+    SDL_ShowCursor(show);
+}
+
+std_og_Texture *std_og_get_buffer(void) {
+  bool matches = true;
+  if (!(((bool)std_og_state_buffer.tx))) {
+    matches=false;
+  } else if ((std_og_state_buffer.w != std_og_state_window_size.x) || (std_og_state_buffer.h != std_og_state_window_size.y)) {
+    SDL_DestroyTexture(std_og_state_buffer.tx);
+    matches=false;
+  }
+  if (!(matches)) {
+    std_og_Texture buf = {0};
+    buf.tx=SDL_CreateTexture(std_og_state_renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, std_og_state_window_size.x, std_og_state_window_size.y);
+    buf.w=std_og_state_window_size.x;
+    buf.h=std_og_state_window_size.y;
+    std_og_state_buffer=buf;
+  }
+  SDL_LockTexture(std_og_state_buffer.tx, NULL, ((void **)&std_og_state_buffer.pixels), &std_og_state_buffer.pitch);
+  return &std_og_state_buffer;
+}
+
+void std_og_draw_buffer(void) {
+  SDL_UnlockTexture(std_og_state_buffer.tx);
+  SDL_RenderCopy(std_og_state_renderer, std_og_state_buffer.tx, NULL, NULL);
+}
+
+void std_og_display_image(std_image_Image *img) {
+  std_og_Texture *tx = std_og_get_buffer();
+  std_sdl_Texture_write_image(tx->tx, img);
+  std_og_draw_buffer();
+}
+
+bool std_og_state_KeyState_get(std_og_state_KeyState *this, SDL_Scancode k) {
+  return this->keys[((u32)k)];}
+
+void std_og_state_update_window_size(void) {
+  SDL_GetWindowSize(std_og_state_window, &std_og_state_window_size.x, &std_og_state_window_size.y);
+}
+
+void std_og_state_add_frametime(f32 frametime) {
+  std_og_state_frametime_total+=(frametime - std_og_state_frametimes[std_og_state_frametime_index]);
+  std_og_state_frametimes[std_og_state_frametime_index]=frametime;
+  std_og_state_frametime_index=((std_og_state_frametime_index + 1) % std_og_state_FRAMETIMES_COUNT);
+}
+
+f32 std_og_state_get_avg_frametime(void) {
+  return (std_og_state_frametime_total / ((f32)std_og_state_FRAMETIMES_COUNT));}
+
+void std_og_utils_handle_sdl_events(void) {
+  std_og_state_prev_mouse=std_og_state_mouse;
+  std_og_state_prev_keys=std_og_state_keys;
+  std_og_state_mouse.scroll=(std_vec_Vec2__3){.x=0, .y=0};
+  SDL_Event event = {0};
+  while (SDL_PollEvent(&event)) {
+switch ((event.type)) {
+      case SDL_QUIT:
+      m_28_0:
+        {
+          std_og_state_running=false;
+        } break;
+      case SDL_KEYDOWN:
+      m_28_1:
+        {
+          SDL_Scancode k = event.key.keysym.scancode;
+          if (((i32)k) < 1024) {
+            std_og_state_keys.keys[((i32)k)]=true;
+          }
+        } break;
+      case SDL_KEYUP:
+      m_28_2:
+        {
+          SDL_Scancode k = event.key.keysym.scancode;
+          if (((i32)k) < 1024) {
+            std_og_state_keys.keys[((i32)k)]=false;
+          }
+        } break;
+      case SDL_MOUSEBUTTONDOWN:
+      m_28_3:
+        {
+          u8 b = event.button.button;
+          std_og_state_mouse.buttons[((i32)b)]=true;
+        } break;
+      case SDL_MOUSEBUTTONUP:
+      m_28_4:
+        {
+          u8 b = event.button.button;
+          std_og_state_mouse.buttons[((i32)b)]=false;
+        } break;
+      case SDL_MOUSEWHEEL:
+      m_28_5:
+        {
+          std_og_state_mouse.wheel_dirs[((i32)std_og_state_MouseWheel_Right)]=(event.wheel.x > 0);
+          std_og_state_mouse.wheel_dirs[((i32)std_og_state_MouseWheel_Left)]=(event.wheel.x < 0);
+          std_og_state_mouse.wheel_dirs[((i32)std_og_state_MouseWheel_Down)]=(event.wheel.y > 0);
+          std_og_state_mouse.wheel_dirs[((i32)std_og_state_MouseWheel_Up)]=(event.wheel.y < 0);
+          std_og_state_mouse.scroll=(std_vec_Vec2__3){.x=event.wheel.x, .y=event.wheel.y};
+        } break;
+      default:
+        {
+        } break;
+    }  }
+  SDL_GetMouseState(&std_og_state_mouse.pos.x, &std_og_state_mouse.pos.y);
+  SDL_GetRelativeMouseState(&std_og_state_mouse.vec.x, &std_og_state_mouse.vec.y);
+}
+
 std_buffer_Buffer std_fs_read_file(char *path) {
   FILE *file = fopen(path, "r");
   if (!(((bool)file))) {
@@ -1782,77 +2024,6 @@ void std_vector_Vector__5_push(std_vector_Vector__5 *this, std_compact_map_Item_
   this->size+=1;
 }
 
-u32 std_sdl_Key_hash(SDL_Scancode this) {
-  return u32_hash(((u32)this));}
-
-bool std_sdl_Key_eq(SDL_Scancode this, SDL_Scancode other) {
-  return this==other;}
-
-u8 *std_sdl_get_keyboard_state(void) {
-  return ((u8 *)SDL_GetKeyboardState(NULL));}
-
-void std_sdl_Renderer_copy_and_display(SDL_Renderer *this, SDL_Texture *texture, SDL_Rect *src, SDL_Rect *dst) {
-  SDL_RenderClear(this);
-  SDL_RenderCopy(this, texture, src, dst);
-  SDL_RenderPresent(this);
-}
-
-void std_sdl_Texture_write_image(SDL_Texture *this, std_image_Image *img) {
-  u8 *data;
-  i32 i_pitch = 0;
-  i32 tw = 0;
-  i32 th = 0;
-  SDL_QueryTexture(this, NULL, NULL, &tw, &th);
-  if(!(((u32)tw)==img->width && ((u32)th)==img->height)) { ae_assert_fail("/home/runner/work/render3d/render3d/ocen/std/sdl/mod.oc:263:12: Assertion failed: `tw as u32 == img.width and th as u32 == img.height`", "Texture and Image sizes do not match"); }
-  SDL_LockTexture(this, NULL, ((void **)&data), &i_pitch);
-  for (u32 y = 0; y < img->height; y+=1) {
-    for (u32 x = 0; x < img->width; x+=1) {
-      std_image_Color c = std_image_Image_get(img, x, y);
-      u32 offset = ((y * ((u32)i_pitch)) + (x * 4));
-      data[(offset + 0)]=c.r;
-      data[(offset + 1)]=c.g;
-      data[(offset + 2)]=c.b;
-      data[(offset + 3)]=((u8)255);
-    }
-  }
-  SDL_UnlockTexture(this);
-}
-
-void std_sdl_run_main_loop(_ClosureTy_3 callback) {
-  bool quit = false;
-  SDL_Event e = {0};
-  while (!(quit)) {
-    bool modified = false;
-    while (SDL_PollEvent(&e)) {
-switch ((e.type)) {
-        case SDL_QUIT:
-        m_28_0:
-          {
-            quit=true;
-          } break;
-        case SDL_KEYDOWN:
-        m_28_1:
-          {
-switch ((e.key.keysym.scancode)) {
-              case SDL_SCANCODE_ESCAPE:
-              m_29_0:
-                {
-                  quit=true;
-                } break;
-              default:
-                {
-                } break;
-            }          } break;
-        default:
-          {
-          } break;
-      }    }
-    if (!(callback.fn(callback._C))) {
-      quit=true;
-    }
-  }
-}
-
 std_matrix_Matrix4f std_matrix_Matrix4f_make(f32 d00, f32 d01, f32 d02, f32 d03, f32 d10, f32 d11, f32 d12, f32 d13, f32 d20, f32 d21, f32 d22, f32 d23, f32 d30, f32 d31, f32 d32, f32 d33) {
   std_matrix_Matrix4f m = {0};
   m.d[0][0]=d00;
@@ -1879,6 +2050,33 @@ std_vec_Vec3__0 std_matrix_Matrix4f_mulv(std_matrix_Matrix4f this, std_vec_Vec3_
   f32 y = ((((v.x * this.d[1][0]) + (v.y * this.d[1][1])) + (v.z * this.d[1][2])) + this.d[1][3]);
   f32 z = ((((v.x * this.d[2][0]) + (v.y * this.d[2][1])) + (v.z * this.d[2][2])) + this.d[2][3]);
   return (std_vec_Vec3__0){.x=x, .y=y, .z=z};
+}
+
+u32 std_sdl_Key_hash(SDL_Scancode this) {
+  return u32_hash(((u32)this));}
+
+bool std_sdl_Key_eq(SDL_Scancode this, SDL_Scancode other) {
+  return this==other;}
+
+void std_sdl_Texture_write_image(SDL_Texture *this, std_image_Image *img) {
+  u8 *data;
+  i32 i_pitch = 0;
+  i32 tw = 0;
+  i32 th = 0;
+  SDL_QueryTexture(this, NULL, NULL, &tw, &th);
+  if(!(((u32)tw)==img->width && ((u32)th)==img->height)) { ae_assert_fail("/home/runner/work/render3d/render3d/ocen/std/sdl/mod.oc:263:12: Assertion failed: `tw as u32 == img.width and th as u32 == img.height`", "Texture and Image sizes do not match"); }
+  SDL_LockTexture(this, NULL, ((void **)&data), &i_pitch);
+  for (u32 y = 0; y < img->height; y+=1) {
+    for (u32 x = 0; x < img->width; x+=1) {
+      std_image_Color c = std_image_Image_get(img, x, y);
+      u32 offset = ((y * ((u32)i_pitch)) + (x * 4));
+      data[(offset + 0)]=c.r;
+      data[(offset + 1)]=c.g;
+      data[(offset + 2)]=c.b;
+      data[(offset + 3)]=((u8)255);
+    }
+  }
+  SDL_UnlockTexture(this);
 }
 
 std_image_Color vec_to_col(std_vec_Vec3__0 vec, f32 scale) {
@@ -1914,7 +2112,7 @@ void swap__0(u32 *a, u32 *b) {
   (*b)=tmp;
 }
 
-void project_and_draw(Triangle tri, std_image_Color color) {
+void project_and_draw(Triangle tri) {
   std_vec_Vec3__0 p0 = std_matrix_Matrix4f_mulv(camera_transform, tri.p0);
   std_vec_Vec3__0 p1 = std_matrix_Matrix4f_mulv(camera_transform, tri.p1);
   std_vec_Vec3__0 p2 = std_matrix_Matrix4f_mulv(camera_transform, tri.p2);
@@ -2025,30 +2223,30 @@ Mesh Mesh_from_obj(char *filename) {
   std_buffer_Buffer file = std_fs_read_file(filename);
   std_sv_SV sv = std_buffer_Buffer_sv(file);
   std_vector_Vector__3 *vectors = ({
+    std_vector_Vector__3 *_vc29 = std_vector_Vector__3_new(8);
+    _vc29;});
+  std_vector_Vector__3 *normals = ({
     std_vector_Vector__3 *_vc30 = std_vector_Vector__3_new(8);
     _vc30;});
-  std_vector_Vector__3 *normals = ({
-    std_vector_Vector__3 *_vc31 = std_vector_Vector__3_new(8);
-    _vc31;});
   std_vector_Vector__4 *textures = ({
-    std_vector_Vector__4 *_vc32 = std_vector_Vector__4_new(8);
-    _vc32;});
-  _ClosureTy_8 parse_vertex = ({from_obj__Closure_0Ctx *_C33 = alloca(sizeof(from_obj__Closure_0Ctx));_C33->textures = &textures;_C33->normals = &normals;_C33->vectors = &vectors;_ClosureTy_8 _ci34 = {._C=_C33, .fn=&from_obj__Closure_0};_ci34;});
+    std_vector_Vector__4 *_vc31 = std_vector_Vector__4_new(8);
+    _vc31;});
+  _ClosureTy_8 parse_vertex = ({from_obj__Closure_0Ctx *_C32 = alloca(sizeof(from_obj__Closure_0Ctx));_C32->textures = &textures;_C32->normals = &normals;_C32->vectors = &vectors;_ClosureTy_8 _ci33 = {._C=_C32, .fn=&from_obj__Closure_0};_ci33;});
   std_vector_Vector__2 *triangles = ({
-    std_vector_Vector__2 *_vc35 = std_vector_Vector__2_new(8);
-    _vc35;});
+    std_vector_Vector__2 *_vc34 = std_vector_Vector__2_new(8);
+    _vc34;});
   for (std_sv_SVLineIterator _i1 = std_sv_SV_lines(sv); std_sv_SVLineIterator_has_value(&_i1); std_sv_SVLineIterator_next(&_i1)) {
     std_sv_SV line = std_sv_SVLineIterator_cur(&_i1);
     {
       {
-        std_sv_SV __match_var_36 = std_sv_SV_chop_word(&line);
-        if (std_sv_SV_eq_str(__match_var_36, "v")) {
+        std_sv_SV __match_var_35 = std_sv_SV_chop_word(&line);
+        if (std_sv_SV_eq_str(__match_var_35, "v")) {
           std_vector_Vector__3_push(vectors, (std_vec_Vec3__0){.x=std_sv_SV_chop_f32(&line), .y=std_sv_SV_chop_f32(&line), .z=std_sv_SV_chop_f32(&line)});
-        } else if (std_sv_SV_eq_str(__match_var_36, "vn")) {
+        } else if (std_sv_SV_eq_str(__match_var_35, "vn")) {
           std_vector_Vector__3_push(normals, (std_vec_Vec3__0){.x=std_sv_SV_chop_f32(&line), .y=std_sv_SV_chop_f32(&line), .z=std_sv_SV_chop_f32(&line)});
-        } else if (std_sv_SV_eq_str(__match_var_36, "vt")) {
+        } else if (std_sv_SV_eq_str(__match_var_35, "vt")) {
           std_vector_Vector__4_push(textures, (std_vec_Vec2__1){.x=std_sv_SV_chop_f32(&line), .y=std_sv_SV_chop_f32(&line)});
-        } else if (std_sv_SV_eq_str(__match_var_36, "f")) {
+        } else if (std_sv_SV_eq_str(__match_var_35, "f")) {
           Vertex p0 = parse_vertex.fn(parse_vertex._C, &line);
           Vertex p1 = parse_vertex.fn(parse_vertex._C, &line);
           while (line.len > 0) {
@@ -2092,39 +2290,53 @@ std_vec_Vec3__0 rotate_vector(std_vec_Vec3__0 v, std_vec_Vec3__0 axis, f32 angle
 void run_ui(Mesh *mesh) {
   u32 width = image->width;
   u32 height = image->height;
-  SDL_Init(SDL_INIT_EVERYTHING);
-  SDL_Window *window;
-  SDL_Renderer *renderer;
-  SDL_CreateWindowAndRenderer(1280, 720, 0, &window, &renderer);
-  SDL_Texture *texture = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_ABGR8888, SDL_TEXTUREACCESS_STREAMING, ((i32)width), ((i32)height));
+  std_og_init(width, height, "Render", false);
+  std_og_grab_input(true);
+  std_og_show_cursor(false);
   f32 MOVE_SENSITIVITY = 5.000000f;
   f32 KEYBOARD_LOOK_SENSITIVITY = 1.500000f;
   f32 MOUSE_LOOK_SENSITIVITY = 0.200000f;
   f32 dtime = 0.000000f;
-  _ClosureTy_9 rotate_camera = ({run_ui__Closure_1Ctx *_C37 = alloca(sizeof(run_ui__Closure_1Ctx));_C37->dtime = &dtime;_ClosureTy_9 _ci38 = {._C=_C37, .fn=&run_ui__Closure_1};_ci38;});
+  _ClosureTy_9 rotate_camera = ({run_ui__Closure_1Ctx *_C36 = alloca(sizeof(run_ui__Closure_1Ctx));_C36->dtime = &dtime;_ClosureTy_9 _ci37 = {._C=_C36, .fn=&run_ui__Closure_1};_ci37;});
   std_compact_map_Map__0 *key_callbacks = ({
-    std_compact_map_Map__0 *_mc39 = std_compact_map_Map__0_new(10);
-    std_compact_map_Map__0_insert(_mc39, SDL_SCANCODE_W, ({run_ui__Closure_2Ctx *_C40 = alloca(sizeof(run_ui__Closure_2Ctx));_C40->dtime = &dtime;_C40->MOVE_SENSITIVITY = &MOVE_SENSITIVITY;_ClosureTy_10 _ci41 = {._C=_C40, .fn=&run_ui__Closure_2};_ci41;}));
-    std_compact_map_Map__0_insert(_mc39, SDL_SCANCODE_S, ({run_ui__Closure_3Ctx *_C42 = alloca(sizeof(run_ui__Closure_3Ctx));_C42->dtime = &dtime;_C42->MOVE_SENSITIVITY = &MOVE_SENSITIVITY;_ClosureTy_10 _ci43 = {._C=_C42, .fn=&run_ui__Closure_3};_ci43;}));
-    std_compact_map_Map__0_insert(_mc39, SDL_SCANCODE_A, ({run_ui__Closure_4Ctx *_C44 = alloca(sizeof(run_ui__Closure_4Ctx));_C44->dtime = &dtime;_C44->MOVE_SENSITIVITY = &MOVE_SENSITIVITY;_ClosureTy_10 _ci45 = {._C=_C44, .fn=&run_ui__Closure_4};_ci45;}));
-    std_compact_map_Map__0_insert(_mc39, SDL_SCANCODE_D, ({run_ui__Closure_5Ctx *_C46 = alloca(sizeof(run_ui__Closure_5Ctx));_C46->dtime = &dtime;_C46->MOVE_SENSITIVITY = &MOVE_SENSITIVITY;_ClosureTy_10 _ci47 = {._C=_C46, .fn=&run_ui__Closure_5};_ci47;}));
-    std_compact_map_Map__0_insert(_mc39, SDL_SCANCODE_Z, ({run_ui__Closure_6Ctx *_C48 = alloca(sizeof(run_ui__Closure_6Ctx));_C48->dtime = &dtime;_C48->MOVE_SENSITIVITY = &MOVE_SENSITIVITY;_ClosureTy_10 _ci49 = {._C=_C48, .fn=&run_ui__Closure_6};_ci49;}));
-    std_compact_map_Map__0_insert(_mc39, SDL_SCANCODE_X, ({run_ui__Closure_7Ctx *_C50 = alloca(sizeof(run_ui__Closure_7Ctx));_C50->dtime = &dtime;_C50->MOVE_SENSITIVITY = &MOVE_SENSITIVITY;_ClosureTy_10 _ci51 = {._C=_C50, .fn=&run_ui__Closure_7};_ci51;}));
-    std_compact_map_Map__0_insert(_mc39, SDL_SCANCODE_UP, ({run_ui__Closure_8Ctx *_C52 = alloca(sizeof(run_ui__Closure_8Ctx));_C52->KEYBOARD_LOOK_SENSITIVITY = &KEYBOARD_LOOK_SENSITIVITY;_C52->rotate_camera = &rotate_camera;_ClosureTy_10 _ci53 = {._C=_C52, .fn=&run_ui__Closure_8};_ci53;}));
-    std_compact_map_Map__0_insert(_mc39, SDL_SCANCODE_DOWN, ({run_ui__Closure_9Ctx *_C54 = alloca(sizeof(run_ui__Closure_9Ctx));_C54->KEYBOARD_LOOK_SENSITIVITY = &KEYBOARD_LOOK_SENSITIVITY;_C54->rotate_camera = &rotate_camera;_ClosureTy_10 _ci55 = {._C=_C54, .fn=&run_ui__Closure_9};_ci55;}));
-    std_compact_map_Map__0_insert(_mc39, SDL_SCANCODE_LEFT, ({run_ui__Closure_10Ctx *_C56 = alloca(sizeof(run_ui__Closure_10Ctx));_C56->KEYBOARD_LOOK_SENSITIVITY = &KEYBOARD_LOOK_SENSITIVITY;_C56->rotate_camera = &rotate_camera;_ClosureTy_10 _ci57 = {._C=_C56, .fn=&run_ui__Closure_10};_ci57;}));
-    std_compact_map_Map__0_insert(_mc39, SDL_SCANCODE_RIGHT, ({run_ui__Closure_11Ctx *_C58 = alloca(sizeof(run_ui__Closure_11Ctx));_C58->KEYBOARD_LOOK_SENSITIVITY = &KEYBOARD_LOOK_SENSITIVITY;_C58->rotate_camera = &rotate_camera;_ClosureTy_10 _ci59 = {._C=_C58, .fn=&run_ui__Closure_11};_ci59;}));
-    _mc39;});
-  i32 fps_sum = 0;
-  u32 fps_window_size = 10;
-  u32 frame = 0;
-  i32 prev_ticks = SDL_GetTicks();
-  std_image_Color dummy_color = (std_image_Color){.r=((u8)255), .g=((u8)0), .b=((u8)0)};
-  SDL_SetRelativeMouseMode(true);
-  SDL_ShowCursor(false);
-  SDL_CaptureMouse(true);
-  _ClosureTy_3 sdl_callback = ({run_ui__Closure_12Ctx *_C60 = alloca(sizeof(run_ui__Closure_12Ctx));_C60->fps_sum = &fps_sum;_C60->dtime = &dtime;_C60->mesh = &mesh;_C60->key_callbacks = &key_callbacks;_C60->frame = &frame;_C60->renderer = &renderer;_C60->window = &window;_C60->fps_window_size = &fps_window_size;_C60->rotate_camera = &rotate_camera;_C60->texture = &texture;_C60->prev_ticks = &prev_ticks;_C60->MOUSE_LOOK_SENSITIVITY = &MOUSE_LOOK_SENSITIVITY;_C60->dummy_color = &dummy_color;_ClosureTy_3 _ci61 = {._C=_C60, .fn=&run_ui__Closure_12};_ci61;});
-  std_sdl_run_main_loop(sdl_callback);
+    std_compact_map_Map__0 *_mc38 = std_compact_map_Map__0_new(11);
+    std_compact_map_Map__0_insert(_mc38, SDL_SCANCODE_W, ({run_ui__Closure_2Ctx *_C39 = alloca(sizeof(run_ui__Closure_2Ctx));_C39->dtime = &dtime;_C39->MOVE_SENSITIVITY = &MOVE_SENSITIVITY;_ClosureTy_10 _ci40 = {._C=_C39, .fn=&run_ui__Closure_2};_ci40;}));
+    std_compact_map_Map__0_insert(_mc38, SDL_SCANCODE_S, ({run_ui__Closure_3Ctx *_C41 = alloca(sizeof(run_ui__Closure_3Ctx));_C41->dtime = &dtime;_C41->MOVE_SENSITIVITY = &MOVE_SENSITIVITY;_ClosureTy_10 _ci42 = {._C=_C41, .fn=&run_ui__Closure_3};_ci42;}));
+    std_compact_map_Map__0_insert(_mc38, SDL_SCANCODE_A, ({run_ui__Closure_4Ctx *_C43 = alloca(sizeof(run_ui__Closure_4Ctx));_C43->dtime = &dtime;_C43->MOVE_SENSITIVITY = &MOVE_SENSITIVITY;_ClosureTy_10 _ci44 = {._C=_C43, .fn=&run_ui__Closure_4};_ci44;}));
+    std_compact_map_Map__0_insert(_mc38, SDL_SCANCODE_D, ({run_ui__Closure_5Ctx *_C45 = alloca(sizeof(run_ui__Closure_5Ctx));_C45->dtime = &dtime;_C45->MOVE_SENSITIVITY = &MOVE_SENSITIVITY;_ClosureTy_10 _ci46 = {._C=_C45, .fn=&run_ui__Closure_5};_ci46;}));
+    std_compact_map_Map__0_insert(_mc38, SDL_SCANCODE_Z, ({run_ui__Closure_6Ctx *_C47 = alloca(sizeof(run_ui__Closure_6Ctx));_C47->dtime = &dtime;_C47->MOVE_SENSITIVITY = &MOVE_SENSITIVITY;_ClosureTy_10 _ci48 = {._C=_C47, .fn=&run_ui__Closure_6};_ci48;}));
+    std_compact_map_Map__0_insert(_mc38, SDL_SCANCODE_X, ({run_ui__Closure_7Ctx *_C49 = alloca(sizeof(run_ui__Closure_7Ctx));_C49->dtime = &dtime;_C49->MOVE_SENSITIVITY = &MOVE_SENSITIVITY;_ClosureTy_10 _ci50 = {._C=_C49, .fn=&run_ui__Closure_7};_ci50;}));
+    std_compact_map_Map__0_insert(_mc38, SDL_SCANCODE_UP, ({run_ui__Closure_8Ctx *_C51 = alloca(sizeof(run_ui__Closure_8Ctx));_C51->KEYBOARD_LOOK_SENSITIVITY = &KEYBOARD_LOOK_SENSITIVITY;_C51->rotate_camera = &rotate_camera;_ClosureTy_10 _ci52 = {._C=_C51, .fn=&run_ui__Closure_8};_ci52;}));
+    std_compact_map_Map__0_insert(_mc38, SDL_SCANCODE_DOWN, ({run_ui__Closure_9Ctx *_C53 = alloca(sizeof(run_ui__Closure_9Ctx));_C53->KEYBOARD_LOOK_SENSITIVITY = &KEYBOARD_LOOK_SENSITIVITY;_C53->rotate_camera = &rotate_camera;_ClosureTy_10 _ci54 = {._C=_C53, .fn=&run_ui__Closure_9};_ci54;}));
+    std_compact_map_Map__0_insert(_mc38, SDL_SCANCODE_LEFT, ({run_ui__Closure_10Ctx *_C55 = alloca(sizeof(run_ui__Closure_10Ctx));_C55->KEYBOARD_LOOK_SENSITIVITY = &KEYBOARD_LOOK_SENSITIVITY;_C55->rotate_camera = &rotate_camera;_ClosureTy_10 _ci56 = {._C=_C55, .fn=&run_ui__Closure_10};_ci56;}));
+    std_compact_map_Map__0_insert(_mc38, SDL_SCANCODE_RIGHT, ({run_ui__Closure_11Ctx *_C57 = alloca(sizeof(run_ui__Closure_11Ctx));_C57->KEYBOARD_LOOK_SENSITIVITY = &KEYBOARD_LOOK_SENSITIVITY;_C57->rotate_camera = &rotate_camera;_ClosureTy_10 _ci58 = {._C=_C57, .fn=&run_ui__Closure_11};_ci58;}));
+    std_compact_map_Map__0_insert(_mc38, SDL_SCANCODE_ESCAPE, ({run_ui__Closure_12Ctx *_C59 = alloca(sizeof(run_ui__Closure_12Ctx));_ClosureTy_10 _ci60 = {._C=_C59, .fn=&run_ui__Closure_12};_ci60;}));
+    _mc38;});
+  u32 prev_ticks = std_og_get_ticks();
+  while (std_og_is_running()) {
+    u32 curr_ticks = std_og_get_ticks();
+    dtime=(((f32)(curr_ticks - prev_ticks)) / 1000.000000f);
+    prev_ticks=curr_ticks;
+    for (std_compact_map_Iterator__0 _i3 = std_compact_map_Map__0_iter(key_callbacks); std_compact_map_Iterator__0_has_value(&_i3); std_compact_map_Iterator__0_next(&_i3)) {
+      std_compact_map_Item__0 it = std_compact_map_Iterator__0_cur(&_i3);
+      {
+        if (std_og_is_key_down(it.key)) {
+          it.value.fn(it.value._C);
+        }
+      }
+    }
+    std_vec_Vec2__3 mouse = std_og_get_mouse_delta();
+    rotate_camera.fn(rotate_camera._C, mouse.x, -mouse.y, MOUSE_LOOK_SENSITIVITY);
+    std_image_Image_clear(image);
+    src_zbuffer_ZBuffer_clear(zbuffer);
+    for (std_vector_Iterator__2 _i4 = std_vector_Vector__2_iter(mesh->triangles); std_vector_Iterator__2_has_value(&_i4); std_vector_Iterator__2_next(&_i4)) {
+      Triangle tri = std_vector_Iterator__2_cur(&_i4);
+      {
+        project_and_draw(tri);
+      }
+    }
+    std_og_display_image(image);
+  }
 }
 
 i32 main(i32 argc, char **argv) {
@@ -2135,18 +2347,18 @@ i32 main(i32 argc, char **argv) {
   std_argparse_Parser_parse(&parser, argc, argv, true);
   std_sv_SV res_sv = std_sv_SV_from_str((*res));
   u32 width = std_sv_SV_chop_u32(&res_sv);
-  u32 height = ({u32 __yv_62;
+  u32 height = ({u32 __yv_61;
     if (std_sv_SV_is_empty(&res_sv)) {
-      __yv_62 = width;
-      goto _l___yv_62;
+      __yv_61 = width;
+      goto _l___yv_61;
     } else {
       std_sv_SV_chop_left(&res_sv, 1);
-      __yv_62 = std_sv_SV_chop_u32(&res_sv);
-      goto _l___yv_62;
+      __yv_61 = std_sv_SV_chop_u32(&res_sv);
+      goto _l___yv_61;
     }
 
-_l___yv_62:
-  __yv_62;});
+_l___yv_61:
+  __yv_61;});
   backface_culling=(*opt_bf_cull);
   aspect_ratio=(std_vec_Vec2__1){.x=(((f32)width) / ((f32)height)), .y=1.000000f};
   size_f=(std_vec_Vec2__1){.x=((f32)width), .y=((f32)height)};
@@ -2168,7 +2380,7 @@ src_zbuffer_ZBuffer *src_zbuffer_ZBuffer_new(u32 w, u32 h) {
   for (u32 i = 0; i < size; i+=1) {
     data[i]=f32_inf();
   }
-  return ({src_zbuffer_ZBuffer *_new_63 = std_mem_state_alloc_fn(std_mem_state_allocator, sizeof(src_zbuffer_ZBuffer)); *_new_63 = (src_zbuffer_ZBuffer){.width=w, .height=h, .data=data}; _new_63; });
+  return ({src_zbuffer_ZBuffer *_new_62 = std_mem_state_alloc_fn(std_mem_state_allocator, sizeof(src_zbuffer_ZBuffer)); *_new_62 = (src_zbuffer_ZBuffer){.width=w, .height=h, .data=data}; _new_62; });
 }
 
 void src_zbuffer_ZBuffer_clear(src_zbuffer_ZBuffer *this) {
@@ -2297,44 +2509,11 @@ void run_ui__Closure_11(void *__C) {
 }
 }
 
-bool run_ui__Closure_12(void *__C) {
+void run_ui__Closure_12(void *__C) {
   run_ui__Closure_12Ctx *_C = (run_ui__Closure_12Ctx *)__C;
 {
-  i32 curr_ticks = SDL_GetTicks();
-  (*_C->dtime)=(((f32)(curr_ticks - (*_C->prev_ticks))) / 1000.000000f);
-  (*_C->prev_ticks)=curr_ticks;
-  u8 *key_states = std_sdl_get_keyboard_state();
-  for (std_compact_map_Iterator__0 _i3 = std_compact_map_Map__0_iter((*_C->key_callbacks)); std_compact_map_Iterator__0_has_value(&_i3); std_compact_map_Iterator__0_next(&_i3)) {
-    std_compact_map_Item__0 it = std_compact_map_Iterator__0_cur(&_i3);
-    {
-      if (key_states[((u32)it.key)] != ((u8)0)) {
-        it.value.fn(it.value._C);
-      }
-    }
-  }
-  i32 mx;
-  i32 my;
-  SDL_GetRelativeMouseState(&mx, &my);
-  (*_C->rotate_camera).fn((*_C->rotate_camera)._C, mx, -my, (*_C->MOUSE_LOOK_SENSITIVITY));
-  std_image_Image_clear(image);
-  src_zbuffer_ZBuffer_clear(zbuffer);
-  for (std_vector_Iterator__2 _i4 = std_vector_Vector__2_iter((*_C->mesh)->triangles); std_vector_Iterator__2_has_value(&_i4); std_vector_Iterator__2_next(&_i4)) {
-    Triangle tri = std_vector_Iterator__2_cur(&_i4);
-    {
-      project_and_draw(tri, (*_C->dummy_color));
-    }
-  }
-  std_sdl_Texture_write_image((*_C->texture), image);
-  std_sdl_Renderer_copy_and_display((*_C->renderer), (*_C->texture), NULL, NULL);
-  i32 fps = ((i32)(1.000000f / (*_C->dtime)));
-  (*_C->fps_sum)+=fps;
-  if (((*_C->frame) % (*_C->fps_window_size))==0) {
-    i32 fps_avg = ((*_C->fps_sum) / ((i32)(*_C->fps_window_size)));
-    SDL_SetWindowTitle((*_C->window), std_format("FPS: %d", fps_avg));
-    (*_C->fps_sum)=0;
-  }
-  ++(*_C->frame);
-  return true;
+  std_og_quit();
+  exit(0);
 }
 }
 
