@@ -1,0 +1,30 @@
+import std::fs
+
+def main() {
+    let data = fs::read_file("/Users/mustafa/Downloads/sharkbite_2s_shortfin_mako_shark.glb")
+    let io = data.reader()
+
+    let sv = io.read_bytes_sv(4)
+    println(`magic: {sv}`)
+
+    let version = io.read_u32(Little)
+    let length = io.read_u32(Little)
+    println(`version: {version}, length: {length}`)
+
+    while not io.is_empty() {
+        let length = io.read_u32(Little)
+        let magic = io.read_bytes_sv(4)
+        println(`chunk length: {length}, chunk magic: {magic}`)
+
+        let data = io.read_bytes_sv(length)
+        match magic {
+            "JSON" => {
+                println(`json chunk: {data}`)
+            }
+            "BIN" => {
+                println(`bin chunk: {data.len} bytes`)
+            }
+            else => assert false, `unknown chunk magic: {magic}`
+        }
+    }
+}

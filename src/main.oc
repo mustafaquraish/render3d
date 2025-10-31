@@ -5,8 +5,12 @@ import std::sv::SV
 import std::matrix::Matrix4f
 import std::og
 import std::argparse
+import std::math
 
 import @zbuffer::{ ZBuffer}
+import @bvh::{ BVH }
+import @bounds::{ Bounds }
+import @ray::{ Ray }
 
 let size_f: Vec2f
 let image: &Image
@@ -20,10 +24,23 @@ let camera_pos: Vec3f
 let camera_dir: Vec3f
 let camera_up: Vec3f
 
+let focal_length: f32 = 1.0
+
 def vec_to_col(vec: Vec3f, scale: f32 = 1.0): Color {
     vec = (vec.normalized() * 128.0 + 128.0) * scale
     return Color(vec.x as u8, vec.y as u8, vec.z as u8)
 }
+
+def camera_to_screen(p0: Vec3f): Vec2i {
+    // project to screen space
+    let p0_s = Vec2f(p0.x / p0.z, p0.y / p0.z) * focal_length
+
+    // project to image space (and flip y axis)
+    let p0_i = (Vec2f(p0_s.x, -p0_s.y) / aspect_ratio + 1.0) * 0.5 * size_f
+    return p0_i.to_i32()
+}
+
+def world_to_screen(p0: Vec3f): Vec2i => camera_to_screen(camera_transform * p0)
 
 def draw_triangle_camera_space(
     p0: Vec3f,
@@ -39,20 +56,10 @@ def draw_triangle_camera_space(
         return
     }
 
-    // project to screen space
-    let p0_s = Vec2f(p0.x / p0.z, p0.y / p0.z)
-    let p1_s = Vec2f(p1.x / p1.z, p1.y / p1.z)
-    let p2_s = Vec2f(p2.x / p2.z, p2.y / p2.z)
-
-    // project to image space (and flip y axis)
-    let p0_i = (Vec2f(p0_s.x, -p0_s.y) / aspect_ratio + 1.0) * 0.5 * size_f
-    let p1_i = (Vec2f(p1_s.x, -p1_s.y) / aspect_ratio + 1.0) * 0.5 * size_f
-    let p2_i = (Vec2f(p2_s.x, -p2_s.y) / aspect_ratio + 1.0) * 0.5 * size_f
-
     fill_triangle_zc(
-        p0_i.to_i32(),
-        p1_i.to_i32(),
-        p2_i.to_i32(),
+        camera_to_screen(p0),
+        camera_to_screen(p1),
+        camera_to_screen(p2),
         p0.z,
         p1.z,
         p2.z,
@@ -80,7 +87,9 @@ def swap<T>(a: &T, b: &T) {
     *b = tmp
 }
 
-def project_and_draw(tri: Triangle) {
+let MIN_CLIP: f32 = 0.2
+
+def draw_triangle_clipped(tri: Triangle) {
     // project to camera space
     let p0 = camera_transform * tri.p0
     let p1 = camera_transform * tri.p1
@@ -99,7 +108,6 @@ def project_and_draw(tri: Triangle) {
     let out_tris: [u32; 3]
     let out_idx = 0
 
-    let MIN_CLIP = 0.2
 
     if p0.z < MIN_CLIP then out_tris[out_idx++] = 0 else in_tris[in_idx++] = 0
     if p1.z < MIN_CLIP then out_tris[out_idx++] = 1 else in_tris[in_idx++] = 1
@@ -228,6 +236,18 @@ struct Triangle {
     n0, n1, n2 : Vec3f
 }
 
+def Triangle::bounds(this): Bounds => Bounds(
+    Vec3f(
+        .p0.x.min(.p1.x).min(.p2.x),
+        .p0.y.min(.p1.y).min(.p2.y),
+        .p0.z.min(.p1.z).min(.p2.z)
+    ),
+    Vec3f(
+        .p0.x.max(.p1.x).max(.p2.x),
+        .p0.y.max(.p1.y).max(.p2.y),
+        .p0.z.max(.p1.z).max(.p2.z)
+    )
+)
 
 struct Mesh {
     triangles: $[Triangle]
@@ -376,6 +396,8 @@ def run_ui(mesh: &Mesh) {
             camera_pos = camera_pos - camera_up * dtime * MOVE_SENSITIVITY
             update_camera(&camera_pos, &camera_dir)
         },
+        M: || => focal_length *= 1.1,
+        N: || => focal_length /= 1.1,
 
         Up:    || => rotate_camera(0, 1, KEYBOARD_LOOK_SENSITIVITY),
         Down:  || => rotate_camera(0, -1, KEYBOARD_LOOK_SENSITIVITY),
@@ -399,16 +421,263 @@ def run_ui(mesh: &Mesh) {
             }
         }
 
+        if og::is_key_pressed(F) {
+            og::toggle_fullscreen()
+        }
+
+        if og::is_key_pressed(O) and depth_limit > 0 then depth_limit--
+        if og::is_key_pressed(P) then depth_limit++
+        if og::is_key_pressed(J) then show_mesh = not show_mesh
+        if og::is_key_pressed(H) then show_ray_and_hit = not show_ray_and_hit
+        if og::is_key_pressed(G) {
+            ray = Ray(camera_pos, camera_dir)
+            hit_nodes.clear()
+            bvh.hit(&ray, hit_nodes)
+        }
+
         let mouse = og::get_mouse_delta()
         rotate_camera(mouse.x, -mouse.y, MOUSE_LOOK_SENSITIVITY)
 
         image.clear()
         zbuffer.clear()
-        for tri in mesh.triangles.iter() {
-            project_and_draw(tri)
+        if show_mesh {
+            for tri in mesh.triangles.iter() {
+                draw_triangle_clipped(tri)
+            }
+        }
+        draw_bvh(bvh)
+
+        if show_ray_and_hit {
+            draw_ray()
+            draw_hit_nodes()
         }
 
         og::display_image(image)
+    }
+}
+
+let bvh: &BVH<Triangle> = null
+let hit_nodes: $[&BVH<Triangle>] = null
+let ray: Ray
+let show_mesh: bool = true
+let show_ray_and_hit: bool = false
+
+def draw_line_clipped_thick(
+    p0_w: Vec3f,
+    p1_w: Vec3f,
+    color: Color,
+    thickness: f32
+) {
+    // The idea is to codegen triangles for a cylinder and draw those
+    let RAD_PARTS = 3
+    let LENGTH_PARTS = u32::max(10, (p1_w - p0_w).length() as u32)
+
+    let dir = p1_w - p0_w
+    let axis = dir.normalized()
+
+    let simple_tri = |p0: Vec3f, p1: Vec3f, p2: Vec3f| {
+        let norm = (p1 - p0).cross(p2 - p0).normalized()
+        draw_triangle_clipped(Triangle(p0, p1, p2, norm, norm, norm))
+    }
+
+    let dir_delta = dir / LENGTH_PARTS as f32
+    let base = axis.cross(Vec3f(1.0, 1.0, 0.0)).normalized() * thickness
+
+    for let i = 0; i < RAD_PARTS; i += 1 {
+        let s0 = base.rotate_axis(axis, (i + 0) as f32 / RAD_PARTS as f32 * math::PI * 2.0)
+        let s1 = base.rotate_axis(axis, (i + 1) as f32 / RAD_PARTS as f32 * math::PI * 2.0)
+
+        for let j = 0; j < LENGTH_PARTS; j += 1 {
+            let t0 = dir_delta * ((j + 0) as f32)
+            let t1 = dir_delta * ((j + 1) as f32)
+
+            let v00 = p0_w + s0 + t0
+            let v01 = p0_w + s0 + t1
+            let v10 = p0_w + s1 + t0
+            let v11 = p0_w + s1 + t1
+
+            simple_tri(v00, v10, v11)
+            simple_tri(v00, v11, v01)
+        }
+    }
+    // std::exit(1)
+}
+
+def draw_line_clipped(
+    p0_w: Vec3f,
+    p1_w: Vec3f,
+    color: Color,
+    ignore_z: bool = false
+) {
+    let p0_c = camera_transform * p0_w
+    let p1_c = camera_transform * p1_w
+
+    let count = (p0_c.z < MIN_CLIP) as i32 + (p1_c.z < MIN_CLIP) as i32
+    match count {
+        0 => {
+            // Nothing clipped. Draw line...
+            let p0 = camera_to_screen(p0_c)
+            let p1 = camera_to_screen(p1_c)
+            draw_line_z(p0, p1, p0_c.z, p1_c.z, color, ignore_z)
+        }
+
+        1 => {
+            // Ensure p0 is always the one that needs to be clipped
+            if p1_c.z < p0_c.z {
+                let tmp = p1_c; p1_c = p0_c; p0_c = tmp;
+            }
+
+            let t = (MIN_CLIP - p0_c.z) / (p1_c.z - p0_c.z)
+            let n0 = interp_vec(p0_c, p1_c, t)
+
+            let p0 = camera_to_screen(p1_c)
+            let p1 = camera_to_screen(n0)
+            draw_line_z(p0, p1, p1_c.z, n0.z, color, ignore_z)
+        }
+
+        2 => {
+            // Both points clipped. Do not draw anything.
+        }
+        else => assert false, "unreachable"
+
+    }
+
+}
+
+def draw_line_z(
+    p1: Vec2i,
+    p2: Vec2i,
+    z1: f32,
+    z2: f32,
+    color: Color,
+    ignore_z: bool = false
+) {
+    let x1 = p1.x as f32
+    let y1 = p1.y as f32
+    let x2 = p2.x as f32
+    let y2 = p2.y as f32
+
+    // line algorithm
+    let dx = x2 - x1
+    let dy = y2 - y1
+    let dz = z2 - z1
+
+    let xt: f32
+    let yt: f32
+    let zt: f32
+
+    if dx.abs() >= dy.abs() {
+        if x2 < x1 {
+            xt = x1; x1 = x2; x2 = xt
+            yt = y1; y1 = y2; y2 = yt
+            zt = z1; z1 = z2; z2 = zt
+        }
+
+        let y = y1
+        let z = z1
+        let y_inc = (y2 - y1) / (x2 - x1)
+        let z_inc = (z2 - z1) / (x2 - x1)
+
+        for let x = x1; x <= x2; x += 1.0 {
+            if 0 <= x as u32 < image.width and 0 <= y as u32 < image.height {
+                if ignore_z or zbuffer.put_if_closer(x as u32, y as u32, z) {
+                    image.set(x as u32, y as u32, color)
+                }
+            }
+
+            y += y_inc
+            z += z_inc
+        }
+
+    } else {
+        if y2 < y1 {
+            xt = x1; x1 = x2; x2 = xt
+            yt = y1; y1 = y2; y2 = yt
+            zt = z1; z1 = z2; z2 = zt
+        }
+
+        let x = x1
+        let z = z1
+        let x_inc = (x2 - x1) / (y2 - y1)
+        let z_inc = (z2 - z1) / (y2 - y1)
+
+        for let y = y1; y <= y2; y += 1.0 {
+            if 0 <= x as u32 < image.width and 0 <= y as u32 < image.height {
+                if ignore_z or zbuffer.put_if_closer(x as u32, y as u32, z) {
+                    image.set(x as u32, y as u32, color)
+                }
+            }
+
+            x += x_inc
+            z += z_inc
+        }
+    }
+}
+
+def draw_bounds_projected(bounds: Bounds, color: Color, thick: bool = false) {
+    let min = bounds.min;
+    let max = bounds.max;
+
+    let C = [
+        Vec3f(min.x, min.y, min.z),
+        Vec3f(max.x, min.y, min.z),
+        Vec3f(max.x, max.y, min.z),
+        Vec3f(min.x, max.y, min.z),
+        Vec3f(min.x, min.y, max.z),
+        Vec3f(max.x, min.y, max.z),
+        Vec3f(max.x, max.y, max.z),
+        Vec3f(min.x, max.y, max.z),
+    ]
+
+    let thickness = 0.01
+    let do_draw = |p0: Vec3f, p1: Vec3f| {
+        if thick {
+            draw_line_clipped_thick(p0, p1, color, thickness)
+        } else {
+            draw_line_clipped(p0, p1, color)
+        }
+    }
+    do_draw(C[0], C[1])
+    do_draw(C[1], C[2])
+    do_draw(C[2], C[3])
+    do_draw(C[3], C[0])
+    do_draw(C[4], C[5])
+    do_draw(C[5], C[6])
+    do_draw(C[6], C[7])
+    do_draw(C[7], C[4])
+    do_draw(C[0], C[4])
+    do_draw(C[1], C[5])
+    do_draw(C[2], C[6])
+    do_draw(C[3], C[7])
+}
+
+let depth_limit: u32 = 0
+def draw_bvh(root: &BVH<Triangle>, depth: u32 = 0) {
+    if depth > depth_limit - 1 {
+        return
+    }
+
+    // Draw the current node's bounds
+    if depth == depth_limit - 1 {
+        draw_bounds_projected(root.bounds, Color(0, 255, 0))
+    }
+
+    if not root.is_leaf {
+        draw_bvh(root.l, depth + 1)
+        draw_bvh(root.r, depth + 1)
+    }
+}
+
+def draw_ray() {
+    let ray_length = 20.0
+    let start = ray.pos
+    let end = ray.at(ray_length)
+    draw_line_clipped_thick(start, end, Color(0, 0, 255), 0.02)
+}
+
+def draw_hit_nodes() {
+    for node in hit_nodes.iter() {
+        draw_bounds_projected(node.bounds, Color(255, 0, 0), thick: true)
     }
 }
 
@@ -438,13 +707,23 @@ def main(argc: i32, argv: &str) {
 
     light_dir = Vec3f(1.0, -1.0, 0.0).normalized()
 
-    camera_pos = Vec3f(0.0, 0.0, -4.0)
+    camera_pos = Vec3f(0.0, 2.0, -4.0)
     camera_dir = Vec3f(0.0, 0.0, 1.0)
     camera_up = Vec3f(0.0, 1.0, 0.0)
     update_camera(&camera_pos, &camera_dir)
 
     let color = Color(255, 0, 0)
     let mesh = Mesh::from_obj(*model)
+
+    bvh = BVH<Triangle>::create(mesh.triangles)
+    hit_nodes = $[]
+
+    ray = Ray(
+        pos: Vec3f(0.0, 2.0, -4.0),
+        dir: Vec3f(0.0, 0.0, 1.0)
+    )
+
+    bvh.hit(&ray, hit_nodes)
 
     run_ui(&mesh)
 }
